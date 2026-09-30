@@ -1,0 +1,18 @@
+{
+    "python.defaultInterpreterPath": "/root/autodl-tmp/conda-envs/audioflow/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.languageServerMode": "light",
+    "terminal.integrated.cwd": "${workspaceFolder}",
+    "terminal.integrated.env.linux": {
+        "HF_HOME": "/root/autodl-tmp/huggingface",
+        "HF_ENDPOINT": "https://hf-mirror.com",
+        "PIP_CACHE_DIR": "/root/autodl-tmp/pip-cache",
+        "PYTHONPATH": "${workspaceFolder}"
+    },
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true
+    },
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
+}

@@ -1,0 +1,45 @@
+---
+clip_duration: 10.
+
+train_datasets:
+    GtzanVAE:
+        root: "/root/autodl-tmp/audioflow/datasets/gtzan_vae_aug10"
+        split: "train"
+
+test_datasets:
+    GtzanVAE:
+        root: "/root/autodl-tmp/audioflow/datasets/gtzan_vae_aug10"
+        split: "test"
+
+sampler: RepeatShuffleSampler
+
+data_transform:
+    name: Label2MusicVAE
+
+base:
+    name: Transformer1D
+    in_dim: 64
+    patch_size: 1
+    dim: 768
+    num_layers: 12
+    num_heads: 12
+    rope_len: 8192
+
+adaptor:
+    name: OnehotEncoder
+    num_classes: 10
+
+train:
+    device: cuda
+    num_workers: 8
+    precision: "no"
+    optimizer: AdamW
+    lr: 1e-4
+    warm_up_steps: 1000
+    batch_size_per_device: 16
+    test_every_n_steps: 100
+    save_every_n_steps: 100
+    training_steps: 20
+    resume_ckpt_path:
+
+valid_audios: 1

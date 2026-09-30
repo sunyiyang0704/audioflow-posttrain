@@ -20,6 +20,69 @@ from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
 from tqdm import tqdm
 
 
+SUPPORTED_PRECISIONS = {"no", "bf16"}
+
+
+def load_training_checkpoint(
+    ckpt_path: str,
+    model: nn.Module,
+    ema: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: optim.lr_scheduler.LRScheduler | None,
+    device: str,
+) -> int:
+    r"""Load a full training checkpoint or a legacy EMA-only state dict."""
+
+    checkpoint = torch.load(ckpt_path, map_location=device)
+
+    if isinstance(checkpoint, dict) and "model" in checkpoint and "ema" in checkpoint:
+        model.load_state_dict(checkpoint["model"], strict=True)
+        ema.load_state_dict(checkpoint["ema"], strict=True)
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        if scheduler and checkpoint.get("scheduler"):
+            scheduler.load_state_dict(checkpoint["scheduler"])
+        step = int(checkpoint["step"])
+        print(f"Resume full training state from step {step}: {ckpt_path}")
+        return step
+
+    # Backward compatibility with the original step=*_ema.pt files.
+    model.load_state_dict(checkpoint, strict=True)
+    ema.load_state_dict(checkpoint, strict=True)
+    print(f"Warm start from legacy EMA weights: {ckpt_path}")
+    return 0
+
+
+def save_training_checkpoint(
+    ckpts_dir: Path,
+    step: int,
+    model: nn.Module,
+    ema: nn.Module,
+    optimizer: optim.Optimizer,
+    scheduler: optim.lr_scheduler.LRScheduler | None,
+) -> None:
+    r"""Save periodic EMA weights and one resumable latest checkpoint."""
+
+    ema_path = ckpts_dir / f"step={step}_ema.pt"
+    torch.save(ema.state_dict(), ema_path)
+    print(f"Save EMA model to {ema_path}")
+
+    latest_path = ckpts_dir / "latest_train.pt"
+    temporary_path = ckpts_dir / ".latest_train.pt.tmp"
+    torch.save(
+        {
+            "format_version": 1,
+            "step": step,
+            "model": model.state_dict(),
+            "ema": ema.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict() if scheduler else None,
+        },
+        temporary_path,
+    )
+    temporary_path.replace(latest_path)
+    print(f"Save resumable training state to {latest_path}")
+
+
 def train(args) -> None:
     r"""Train audio generation with flow matching."""
 
@@ -32,6 +95,16 @@ def train(args) -> None:
     configs = parse_yaml(config_path)
     device = configs["train"]["device"]
     ckpt_path = configs["train"]["resume_ckpt_path"]
+    precision = configs["train"].get("precision", "no")
+    if precision not in SUPPORTED_PRECISIONS:
+        raise ValueError(
+            f"Unsupported precision: {precision}. "
+            f"Choose one of {sorted(SUPPORTED_PRECISIONS)}."
+        )
+    device_type = torch.device(device).type
+    use_bf16 = precision == "bf16"
+    if use_bf16 and device_type == "cuda" and not torch.cuda.is_bf16_supported():
+        raise RuntimeError("The selected CUDA device does not support bfloat16 training.")
 
     # Checkpoints directory
     config_name = Path(config_path).stem
@@ -70,10 +143,6 @@ def train(args) -> None:
 
     model = CombinedModel(base, adaptor)
 
-    if ckpt_path:
-        ckpt = torch.load(ckpt_path)
-        model.load_state_dict(ckpt, strict=True)
-
     # EMA (optional)
     ema = deepcopy(model).to(device)
     requires_grad(ema, False)
@@ -85,12 +154,40 @@ def train(args) -> None:
         configs=configs, 
         params=model.parameters()
     )
+
+    start_step = 0
+    if ckpt_path:
+        start_step = load_training_checkpoint(
+            ckpt_path=ckpt_path,
+            model=model,
+            ema=ema,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+        )
+
+    training_steps = int(configs["train"]["training_steps"])
+    if start_step >= training_steps:
+        print(
+            f"Checkpoint is already at step {start_step}; "
+            f"requested training_steps is {training_steps}. Nothing to do."
+        )
+        return
     
     # Logger
     if wandb_log:
         wandb.init(project="audio_flow", name=f"{filename}_{config_name}")
 
-    for step, data in enumerate(tqdm(train_dataloader)):
+    progress = tqdm(total=training_steps, initial=start_step)
+    step = start_step
+
+    for data in train_dataloader:
+
+        if step >= training_steps:
+            break
+
+        # Step numbers now represent completed optimizer updates (1..N).
+        step += 1
 
         # ------ 1. Data preparation ------
         # 1.1 Transform data into latent representations and conditions
@@ -105,14 +202,19 @@ def train(args) -> None:
         # ------ 2. Training ------
         # 2.1 Forward
         model.train()
-        emb_dict = model.adaptor(cond_dict)
-        vt = model.base(t=t, x=xt, emb_dict=emb_dict)
+        with torch.autocast(
+            device_type=device_type,
+            dtype=torch.bfloat16,
+            enabled=use_bf16,
+        ):
+            emb_dict = model.adaptor(cond_dict)
+            vt = model.base(t=t, x=xt, emb_dict=emb_dict)
 
-        # 2.2 Loss
-        loss = torch.mean((vt - ut) ** 2)
+            # 2.2 Loss
+            loss = torch.mean((vt - ut) ** 2)
 
         # 2.3 Optimize
-        optimizer.zero_grad()  # Reset all parameter.grad to 0
+        optimizer.zero_grad(set_to_none=True)  # Reset gradients
         loss.backward()  # Update all parameter.grad
         optimizer.step()  # Update all parameters based on all parameter.grad
         update_ema(ema, model, decay=0.999)
@@ -120,6 +222,8 @@ def train(args) -> None:
         # 2.4 Learning rate scheduler
         if scheduler:
             scheduler.step()
+
+        progress.update(1)
 
         if step % 100 == 0:
             print("train loss: {:.4f}".format(loss.item()))
@@ -134,7 +238,8 @@ def train(args) -> None:
                     data_transform=data_transform,
                     model=ema,
                     split=split,
-                    out_dir=Path("./results", filename, config_name, f"steps={step}_ema")
+                    out_dir=Path("./results", filename, config_name, f"steps={step}_ema"),
+                    precision=precision,
                 )
 
             if wandb_log:
@@ -146,16 +251,20 @@ def train(args) -> None:
                 )
         
         # 3.2 Save model
-        if step % configs["train"]["save_every_n_steps"] == 0:
-           
-            ckpt_path = Path(ckpts_dir, f"step={step}_ema.pt")
-            torch.save(ema.state_dict(), ckpt_path)
-            print(f"Save model to {ckpt_path}")
+        if (
+            step % configs["train"]["save_every_n_steps"] == 0
+            or step == training_steps
+        ):
+            save_training_checkpoint(
+                ckpts_dir=ckpts_dir,
+                step=step,
+                model=model,
+                ema=ema,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
 
-        if step == configs["train"]["training_steps"]:
-            break
-
-        step += 1
+    progress.close()
         
 
 def get_dataset(
@@ -327,6 +436,8 @@ def get_optimizer_and_scheduler(
 
     if optimizer_name == "AdamW":
         optimizer = optim.AdamW(params=params, lr=lr)
+    else:
+        raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
     if warm_up_steps:
         lr_lambda = LinearWarmUp(warm_up_steps)
@@ -342,11 +453,14 @@ def validate(
     data_transform: object,
     model: nn.Module,
     split: Literal["train", "test"],
-    out_dir: str
-) -> float:
+    out_dir: str,
+    precision: str = "no",
+) -> None:
     r"""Validate the model on part of data."""
 
     device = next(model.parameters()).device
+    device_type = device.type
+    use_bf16 = precision == "bf16"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     valid_audios = configs["valid_audios"]
@@ -376,7 +490,11 @@ def validate(
 
         # ------ 2. Forward with ODE ------
         # 2.1 Iteratively forward
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(
+            device_type=device_type,
+            dtype=torch.bfloat16,
+            enabled=use_bf16,
+        ):
             model.eval()
             emb_dict = model.adaptor(cond_dict)
             traj = torchdiffeq.odeint(
@@ -422,7 +540,8 @@ def validate(
             caption = ""
 
         out_path = Path(out_dir, f"{split}_{i}{caption}.png")
-        plt.savefig(out_path)
+        fig.savefig(out_path)
+        plt.close(fig)
         print(f"Write out to {out_path}")
 
         # 3.2 Save audio

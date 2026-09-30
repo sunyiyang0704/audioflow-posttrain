@@ -1,0 +1,47 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "1. 调试原版 OnehotEncoder（无 GPU）",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.vscode/debug_component.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "2. 训练 20-step smoke（需要 GPU）",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "args": [
+                "--config=${workspaceFolder}/configs/text2music_vscode_smoke.yaml",
+                "--no_log"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "justMyCode": true
+        },
+        {
+            "name": "3. 用正式权重采样（需要 GPU）",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/sample.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "args": [
+                "--config=${workspaceFolder}/configs/text2music.yaml",
+                "--ckpt_path=/root/autodl-tmp/audioflow/checkpoints/train/text2music_formal/step=500000_ema.pt",
+                "--out_dir=${workspaceFolder}/results/vscode_sample"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "justMyCode": true
+        }
+    ]
+}

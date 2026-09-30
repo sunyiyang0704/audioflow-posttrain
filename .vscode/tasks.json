@@ -1,0 +1,21 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "AudioFlow：无 GPU 代码检查",
+            "type": "shell",
+            "command": "/root/autodl-tmp/conda-envs/audioflow/bin/python",
+            "args": [
+                "-m",
+                "py_compile",
+                "train.py",
+                "sample.py",
+                "audio_flow/vae/levo.py"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": "$python"
+        }
+    ]
+}

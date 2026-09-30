@@ -1,0 +1,71 @@
+---
+clip_duration: 10.
+
+train_datasets:
+    GtzanVAE:
+        root: "/root/autodl-tmp/audioflow/datasets/gtzan_vae_aug10"
+        split: "train"
+
+test_datasets:
+    GtzanVAE:
+        root: "/root/autodl-tmp/audioflow/datasets/gtzan_vae_aug10"
+        split: "test"
+
+sampler: RepeatShuffleSampler
+
+data_transform:
+    name: Label2MusicVAE
+
+base:
+    name: Transformer1D
+    in_dim: 64
+    patch_size: 1
+    dim: 768
+    num_layers: 12
+    num_heads: 12
+    rope_len: 8192
+
+adaptor:
+    name: OnehotEncoder
+    num_classes: 10
+
+train:
+    device: cuda
+    num_workers: 4
+
+post_training:
+    output_dir: "/root/autodl-tmp/audioflow/checkpoints/post_train/text2music_grow"
+    freeze_adaptor: true
+    lora_rank: 16
+    lora_alpha: 32
+    lora_targets: ["qkv_linear", "proj", "ffn.0", "ffn.2"]
+    condition_dropout: 0.1
+    replay_batch_size: 2
+    replay_weight: 0.2
+
+    candidates_per_condition: 4
+    latent_frames: 250
+    sample_steps: 20
+    guidance_scale: 2.0
+    reward_plugin:
+    reward:
+        backend: pretrained
+        device: cuda
+        clap_model: laion/clap-htsat-unfused
+        labels: [blues, classical, country, disco, hip hop, jazz, metal, pop, reggae, rock]
+        weights:
+            clap: 0.5
+            content_enjoyment: 0.2
+            production_quality: 0.3
+            signal_penalty: 0.1
+
+    grow_lr: 3e-6
+    grow_steps: 800
+    grow_checkpoint_every: 200
+    grow_advantage_weight: 1.0
+    grow_anchor_weight: 1.0
+    grow_min_reward_std: 0.02
+    grow_reward_weights:
+        clap_condition: 0.5
+        content_enjoyment: 0.2
+        production_quality: 0.3

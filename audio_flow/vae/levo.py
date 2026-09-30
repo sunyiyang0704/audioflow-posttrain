@@ -1,4 +1,5 @@
 import json
+import os
 import torch.nn as nn
 import torch
 from torch import Tensor
@@ -12,13 +13,18 @@ class LevoVAE(nn.Module):
     def __init__(self):
         super().__init__()
 
+        repo_id = os.environ.get(
+            "AUDIOFLOW_VAE_REPO_ID",
+            "lglg666/SongGeneration-Runtime",
+        )
+
         config_path = hf_hub_download(
-            repo_id="tencent/SongGeneration", 
+            repo_id=repo_id,
             filename="ckpt/vae/stable_audio_1920_vae.json"
         )
 
         model_path = hf_hub_download(
-            repo_id="tencent/SongGeneration", 
+            repo_id=repo_id,
             filename="ckpt/vae/autoencoder_music_1320k.ckpt"
         )
         

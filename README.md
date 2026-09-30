@@ -1,100 +1,78 @@
-# AudioFlow: Audio Generation with Flow Matching
+# AudioFlow Post-training
 
-This repository contains a tutorial on audio generation using conditional flow matching implemented in PyTorch. Signals from any modality, including text, audio, MIDI, images, and video, can be converted to audio using conditional flow matching. The figure below shows the framework.
+This fork reproduces AudioFlow's GTZAN text-to-music baseline and adds
+resumable training, LoRA SFT, GROW, and Flow-GRPO experiments. The original
+AudioFlow project is available at
+[qiuqiangkong/audioflow](https://github.com/qiuqiangkong/audioflow).
 
-The supported tasks include:
-
-| Tasks                   | Supported    | Dataset    | Config yaml                                                  |
-|-------------------------|--------------|------------|--------------------------------------------------------------|
-| Text to music           | ✅           | GTZAN      | [configs/text2music.yaml](configs/text2music.yaml)           |
-| MIDI to music           | ✅           | MAESTRO    | [configs/midi2music.yaml](configs/midi2music.yaml)           |
-| Codec to audio          | ✅           | MUSDB18HQ  | [configs/codec2audio.yaml](configs/codec2audio.yaml)         |
-| Mono to stereo          | ✅           | MUSDB18HQ  | [configs/mono2stereo.yaml](configs/mono2stereo.yaml)         |
-| Super resolution        | ✅           | MUSDB18HQ  | [configs/superresolution.yaml](configs/superresolution.yaml) |
-| Music source separation | ✅           | MUSDB18HQ  | [configs/mss.yaml](configs/mss.yaml)                         |
-| Vocal to music          | ✅           | MUSDB18HQ  | [configs/vocal2music.yaml](configs/vocal2music.yaml)         |
-
-
-## 0. Install dependencies
+## Setup
 
 ```bash
-# Clone the repo
-git clone https://github.com/qiuqiangkong/audio_flow
-cd audio_flow
-
-# Install Python environment
-conda create --name audio_flow python=3.10
-
-# Activate environment
-conda activate audio_flow
-
-# Install Python packages dependencies
+conda create -n audioflow python=3.10 -y
+conda activate audioflow
 bash env.sh
 ```
 
-## 1. Download datasets
+The VAE is loaded from `lglg666/SongGeneration-Runtime` by default. Set
+`AUDIOFLOW_VAE_REPO_ID` to use another compatible repository.
 
-Download the dataset corresponding to the task. 
-
-GTZAN (1.3 GB, 8 hours):
-
-```bash
-bash ./scripts/download_gtzan.sh
-```
-
-MUSDB18HQ (30 GB, 10 hours):
+## GTZAN baseline
 
 ```bash
-bash ./scripts/download_musdb18hq.sh
+bash scripts/download_gtzan.sh
+
+CUDA_VISIBLE_DEVICES=0 python -m compute_latents.gtzan \
+  --dataset_root ./datasets/gtzan \
+  --out_dir ./datasets/gtzan_vae \
+  --augmentation_repeats 10
+
+CUDA_VISIBLE_DEVICES=0 python train.py \
+  --config configs/text2music.yaml --no_log
 ```
 
-To download more datasets please see [scripts](scripts).
+`latest_train.pt` contains the model, EMA, optimizer, scheduler, and completed
+step. Set `train.resume_ckpt_path` in the YAML file to resume an interrupted
+run. The `step=*_ema.pt` files contain inference weights only.
 
-## 2. Train
+Generate samples with:
 
-### 2.0 Pre-extract VAE latent
-
-In training, uses can use (1) online VAE extraction, or (2) offline VAE extraction. We adopt (2) to speed up the training of flow matching and to save RAM. 
-
-```python
-CUDA_VISIBLE_DEVICES=0 python -m compute_latents.gtzan_vae \
-  --dataset_root="./datasets/gtzan" \
-  --out_dir="./datasets/gtzan_vae" \
-  --augmentation_repeats=10
+```bash
+CUDA_VISIBLE_DEVICES=0 python sample.py \
+  --config configs/text2music.yaml \
+  --ckpt_path checkpoints/train/text2music/step=500000_ema.pt \
+  --out_dir results/text2music
 ```
 
-### 2.1 Train with single GPU
+Other tasks and datasets are available under `configs/`, `compute_latents/`,
+and `scripts/`.
 
-Here is an example of training a text to music generation system. Users can train different tasks viewing more config yaml files at [configs](configs).
+## Post-training
 
-```python
-CUDA_VISIBLE_DEVICES=0 python train.py --config="./configs/text2music.yaml" --no_log
+The post-training experiments are split into three scripts:
+
+1. `sft_train.py`: rank-16 LoRA SFT with 0.1 condition dropout;
+2. `grow_train.py`: group-relative reward optimization with real-data replay;
+3. `flow_grpo_train.py`: stochastic Flow-GRPO with PPO clipping, reference KL,
+   waveform verification, and real-data replay.
+
+```bash
+python sft_train.py \
+  --config configs/text2music_sft.yaml --checkpoint "$BASE_EMA"
+
+python grow_train.py \
+  --config configs/text2music_grow.yaml --checkpoint "$SFT_CKPT"
+
+python flow_grpo_train.py \
+  --config configs/text2music_flow_grpo.yaml --checkpoint "$GROW_CKPT"
 ```
 
-### 2.2 Finetune
+Use `evaluate_posttrain.py` for paired fixed-noise evaluation and
+`sample_compare.py` to export matched listening samples. See
+[`docs/CODE_CHANGES.md`](docs/CODE_CHANGES.md) for the implementation summary
+and measured results.
 
-Extract VAE latent:
+## References
 
-```python
-CUDA_VISIBLE_DEVICES=6 python -m compute_latents.musdb18hq_vae stems \
-  --dataset_root="./datasets/musdb18hq" \
-  --out_dir="./datasets/musdb18hq_vae" \
-  --augmentation_repeats=10
-```
-
-Train:
-
-```python
-CUDA_VISIBLE_DEVICES=0 python finetune.py \
-  --config="./configs/mss.yaml" \
-  --ckpt_path="checkpoints/train/text2music/step=300000_ema.pth" \
-  --no_log
-```
-
-To run more examples please see [configs](configs).
-
-## External links
-
-[1] Conditional flow matching: https://github.com/atong01/conditional-flow-matching
-
-[2] DiT: https://github.com/facebookresearch/DiT
+- [Conditional Flow Matching](https://github.com/atong01/conditional-flow-matching)
+- [DiT](https://github.com/facebookresearch/DiT)
+- [Flow-GRPO](https://arxiv.org/abs/2505.05470)

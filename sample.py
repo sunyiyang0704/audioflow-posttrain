@@ -29,9 +29,8 @@ def sample(args):
     # Arguments
     config_path = args.config
     ckpt_path = args.ckpt_path
-    device = "cuda"
-
     configs = parse_yaml(config_path)
+    device = configs["train"].get("device", "cuda")
 
     data_transform = get_data_transform(configs).to(device)
 
@@ -42,10 +41,12 @@ def sample(args):
 
     # Load checkpoint
     if ckpt_path:
-        ckpt = torch.load(ckpt_path)
-        model.load_state_dict(ckpt, strict=True)
+        ckpt = torch.load(ckpt_path, map_location=device)
+        # Accept both the new resumable checkpoint and legacy EMA-only files.
+        state_dict = ckpt["ema"] if isinstance(ckpt, dict) and "ema" in ckpt else ckpt
+        model.load_state_dict(state_dict, strict=True)
 
-    out_dir = "_tmp"
+    out_dir = args.out_dir
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     # Prepare condition
@@ -78,7 +79,8 @@ def sample(args):
         fig, ax = plt.subplots(1, 1, figsize=(10, 10))
         ax.matshow(gen_logmel.T, origin='lower', aspect='auto', cmap='jet', vmin=-10, vmax=5)
         out_path = Path(out_dir, "{}.pdf".format(GtzanVAE.IX_TO_LB[id]))
-        plt.savefig(out_path)
+        fig.savefig(out_path)
+        plt.close(fig)
         print(f"Write out to {out_path}")
 
         # Write to audio
@@ -91,7 +93,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path of config yaml.")
-    parser.add_argument("--ckpt_path", type=str, required=True, help="Path of config yaml.")
+    parser.add_argument("--ckpt_path", type=str, required=True, help="Path of checkpoint.")
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        default="_tmp",
+        help="Directory for generated WAV and PDF files.",
+    )
     args = parser.parse_args()
 
     sample(args)
