@@ -7,7 +7,7 @@ import torch
 from torch import nn
 from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
 
-from grow_train import group_advantages, grow_losses
+from awm_train import group_advantages, matching_losses
 
 
 class TinyAdaptor(nn.Module):
@@ -31,7 +31,7 @@ class TinyModel(nn.Module):
         self.adaptor = TinyAdaptor()
 
 
-class GrowTrainTests(unittest.TestCase):
+class AdvantageWeightedMatchingTests(unittest.TestCase):
     def test_better_candidate_gets_positive_weight(self):
         scores = [
             {"clap_condition": 0.8, "content_enjoyment": 0.7,
@@ -54,7 +54,7 @@ class GrowTrainTests(unittest.TestCase):
         advantages = torch.tensor([1.0, -1.0])
         matcher = ConditionalFlowMatcher(sigma=0.0)
         torch.manual_seed(42)
-        before, anchor, _ = grow_losses(
+        before, anchor, _ = matching_losses(
             model, reference, ids, latents, advantages, matcher
         )
         self.assertAlmostEqual(anchor.item(), 0.0)
@@ -64,7 +64,7 @@ class GrowTrainTests(unittest.TestCase):
         with torch.no_grad():
             model.base.scale -= 0.01 * model.base.scale.grad
         torch.manual_seed(42)
-        after, anchor, _ = grow_losses(
+        after, anchor, _ = matching_losses(
             model, reference, ids, latents, advantages, matcher
         )
         self.assertLess(after.item(), before.item())

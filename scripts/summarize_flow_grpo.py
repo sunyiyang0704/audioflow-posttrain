@@ -69,7 +69,7 @@ def summarize(paths, baseline, candidates):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", action="append", required=True, help="JSON path or glob")
-    parser.add_argument("--baseline", default="grow800")
+    parser.add_argument("--baseline", default="awm800")
     parser.add_argument("--candidate", action="append", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()

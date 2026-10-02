@@ -1,7 +1,8 @@
 # AudioFlow Post-training
 
 This fork reproduces AudioFlow's GTZAN text-to-music baseline and adds
-resumable training, LoRA SFT, GROW, and Flow-GRPO experiments. The original
+resumable training, LoRA SFT, Advantage-Weighted Matching (AWM), and Flow-GRPO
+experiments. The original
 AudioFlow project is available at
 [qiuqiangkong/audioflow](https://github.com/qiuqiangkong/audioflow).
 
@@ -51,7 +52,7 @@ and `scripts/`.
 The post-training experiments are split into three scripts:
 
 1. `sft_train.py`: rank-16 LoRA SFT with 0.1 condition dropout;
-2. `grow_train.py`: group-relative reward optimization with real-data replay;
+2. `awm_train.py`: Advantage-Weighted Matching with real-data replay;
 3. `flow_grpo_train.py`: stochastic Flow-GRPO with PPO clipping, reference KL,
    waveform verification, and real-data replay.
 
@@ -59,11 +60,11 @@ The post-training experiments are split into three scripts:
 python sft_train.py \
   --config configs/text2music_sft.yaml --checkpoint "$BASE_EMA"
 
-python grow_train.py \
-  --config configs/text2music_grow.yaml --checkpoint "$SFT_CKPT"
+python awm_train.py \
+  --config configs/text2music_awm.yaml --checkpoint "$SFT_CKPT"
 
 python flow_grpo_train.py \
-  --config configs/text2music_flow_grpo.yaml --checkpoint "$GROW_CKPT"
+  --config configs/text2music_flow_grpo.yaml --checkpoint "$AWM_CKPT"
 ```
 
 Use `evaluate_posttrain.py` for paired fixed-noise evaluation and

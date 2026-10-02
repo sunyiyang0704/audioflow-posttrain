@@ -1,7 +1,7 @@
-"""GROW: group-relative reward training for the deterministic AudioFlow ODE.
+"""Advantage-Weighted Matching for the deterministic AudioFlow ODE.
 
-This is advantage-weighted flow matching, not likelihood-ratio GRPO. It keeps
-the conditional and unconditional velocity fields close to the SFT reference.
+The objective weights flow-matching errors with group-relative reward
+advantages and anchors both CFG branches to the SFT reference.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def group_advantages(scores: list[dict], weights: dict, min_std: float, device):
     return advantage - advantage.mean()
 
 
-def grow_losses(model, reference, ids, latents, advantages, fm):
+def matching_losses(model, reference, ids, latents, advantages, fm):
     """Signed FM objective plus reference anchors for both CFG branches."""
 
     noise = torch.randn_like(latents)
@@ -96,7 +96,7 @@ def main():
     if post.get("freeze_adaptor", True):
         requires_grad(model.adaptor, False)
     parameters = trainable_parameters(model)
-    optimizer = torch.optim.AdamW(parameters, lr=float(post["grow_lr"]))
+    optimizer = torch.optim.AdamW(parameters, lr=float(post["awm_lr"]))
     start_step = 1
     if args.resume_state:
         state = torch.load(args.resume_state, map_location=device)
@@ -113,16 +113,16 @@ def main():
     classes = int(configs["adaptor"]["num_classes"])
     output_dir = Path(post["output_dir"])
     weights = post.get(
-        "grow_reward_weights",
+        "awm_reward_weights",
         {
             "clap_condition": 0.5,
             "content_enjoyment": 0.2,
             "production_quality": 0.3,
         },
     )
-    min_std = float(post.get("grow_min_reward_std", 0.02))
+    min_std = float(post.get("awm_min_reward_std", 0.02))
 
-    for step in trange(start_step, int(post["grow_steps"]) + 1, desc="GROW"):
+    for step in trange(start_step, int(post["awm_steps"]) + 1, desc="AWM"):
         condition_id = (step - 1) % classes
         ids = torch.full((group_size,), condition_id, dtype=torch.long, device=device)
         _, latents = sample_latents(
@@ -139,15 +139,15 @@ def main():
             reward_fn, audios, transform.sr, [condition_id] * group_size
         )
         advantages = group_advantages(scores, weights, min_std, device)
-        reward_loss, anchor, per_candidate = grow_losses(
+        reward_loss, anchor, per_candidate = matching_losses(
             model, reference, ids, latents.detach(), advantages, fm
         )
         supervised = replay_loss(
             model, transform, iterator, fm, float(post["condition_dropout"])
         )
         loss = (
-            float(post.get("grow_advantage_weight", 1.0)) * reward_loss
-            + float(post.get("grow_anchor_weight", 1.0)) * anchor
+            float(post.get("awm_advantage_weight", 1.0)) * reward_loss
+            + float(post.get("awm_anchor_weight", 1.0)) * anchor
             + float(post.get("replay_weight", 0.2)) * supervised
         )
         if step == start_step:
@@ -166,17 +166,17 @@ def main():
         optimizer.step()
         if step == start_step or step % 20 == 0:
             print(
-                f"grow step={step} loss={loss.item():.4f} "
+                f"awm step={step} loss={loss.item():.4f} "
                 f"reward={reward_loss.item():.4f} anchor={anchor.item():.4f} "
                 f"replay={supervised.item():.4f} score={sum(row['total'] for row in scores)/group_size:.4f} "
                 f"fm_range=({per_candidate.min().item():.4f},{per_candidate.max().item():.4f})",
                 flush=True,
             )
-        if step % int(post.get("grow_checkpoint_every", 100)) == 0:
+        if step % int(post.get("awm_checkpoint_every", 100)) == 0:
             save_checkpoint(
                 model,
                 optimizer,
-                output_dir / f"grow_step={step}.pt",
+                output_dir / f"awm_step={step}.pt",
                 step,
                 "advantage_weighted_flow_matching",
                 args.config,
